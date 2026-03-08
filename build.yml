@@ -1,0 +1,157 @@
+name: Build Kosmo OS ISO
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # ── 1. Descargar el código ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Instalar dependencias ────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            nasm \
+            gcc \
+            gcc-multilib \
+            binutils \
+            make \
+            grub-pc-bin \
+            grub-common \
+            xorriso \
+            mtools \
+            file \
+            xz-utils
+
+      # ── 3. Verificar versiones ──────────────────────────────────────────────
+      - name: Show tool versions
+        run: |
+          echo "nasm:          $(nasm --version)"
+          echo "gcc:           $(gcc --version | head -1)"
+          echo "ld:            $(ld --version | head -1)"
+          echo "grub-mkrescue: $(grub-mkrescue --version 2>&1 | head -1)"
+          echo "xorriso:       $(xorriso --version 2>&1 | head -1)"
+
+      # ── 4. Verificar que todos los archivos necesarios están en el repo ─────
+      - name: Verify required files exist
+        run: |
+          echo "Checking required source files..."
+          MISSING=0
+          check() {
+            if [ -f "$1" ]; then
+              echo "  OK  $1"
+            else
+              echo "  MISSING  $1"
+              MISSING=$((MISSING+1))
+            fi
+          }
+          # ASM del kernel (los que más fallan)
+          check kernel/arch/x86/entry.asm
+          check kernel/arch/x86/isr.asm
+          # Archivos C del kernel
+          check kernel/arch/x86/gdt.c
+          check kernel/arch/x86/gdt.h
+          check kernel/arch/x86/idt.c
+          check kernel/arch/x86/idt.h
+          check kernel/core/kernel.c
+          check kernel/core/kernel.h
+          check kernel/core/panic.c
+          check kernel/core/panic.h
+          check kernel/linker.ld
+          # Drivers
+          check drivers/video/vga.c
+          check drivers/video/vga.h
+          check drivers/video/vesa.c
+          check drivers/video/vesa.h
+          check drivers/input/keyboard.c
+          check drivers/input/keyboard.h
+          check drivers/input/mouse.c
+          check drivers/input/mouse.h
+          check drivers/timer/pit.c
+          check drivers/timer/pit.h
+          # Librería C del kernel
+          check libc/string.c
+          check libc/string.h
+          check libc/stdio.c
+          check libc/stdio.h
+          # Headers globales
+          check include/types.h
+          check include/io.h
+          check include/multiboot.h
+          # Filesystem
+          check fs/kosmofs.c
+          check fs/kosmofs.h
+          # Shell
+          check shell/shell.c
+          check shell/shell.h
+          check shell/commands/commands.c
+          check shell/commands/commands.h
+          check shell/commands/cmd_fs.c
+          # GUI
+          check gui/wm.c
+          check gui/wm.h
+          check gui/desktop.c
+          check gui/desktop.h
+          check gui/font/font8x8.c
+          check gui/font/font8x8.h
+          # Tests
+          check tests/ktest.c
+          check tests/ktest.h
+          # GRUB config
+          check iso/grub/grub.cfg
+          # Makefile
+          check Makefile
+
+          if [ "$MISSING" -gt 0 ]; then
+            echo ""
+            echo "ERROR: $MISSING required file(s) are missing from the repository."
+            echo "Upload the missing files to GitHub and try again."
+            exit 1
+          fi
+          echo ""
+          echo "All required files present."
+
+      # ── 5. Compilar el kernel ───────────────────────────────────────────────
+      - name: Build kernel and ISO
+        run: make all
+
+      # ── 6. Mostrar resultados ───────────────────────────────────────────────
+      - name: Show build results
+        run: |
+          echo "=== Build output files ==="
+          ls -lh build/
+
+          echo ""
+          echo "=== Kernel section sizes ==="
+          size build/kernel.elf
+
+          echo ""
+          echo "=== ISO info ==="
+          ls -lh build/kosmo-os.iso
+          file build/kosmo-os.iso
+
+      # ── 7. Subir la ISO como artifact descargable ───────────────────────────
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: kosmo-os-iso
+          path: build/kosmo-os.iso
+          retention-days: 30
+
+      # ── 8. Subir el kernel ELF (para debug con GDB) ─────────────────────────
+      - name: Upload kernel ELF (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kosmo-os-kernel-elf
+          path: build/kernel.elf
+          retention-days: 30
