@@ -18,6 +18,12 @@
 #include "stdio.h"
 #include "pit.h"
 #include "keyboard.h"
+#include "shell.h"
+#include "kosmofs.h"
+#include "vesa.h"
+#include "mouse.h"
+#include "wm.h"
+#include "desktop.h"
 
 /* =============================================================================
  * ESTADO GLOBAL DEL SISTEMA
@@ -247,33 +253,34 @@ void kernel_main(uint32_t magic, multiboot_info_t* mbi) {
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
     kprintf("  All core subsystems initialized successfully.\n\n");
 
-    /* ── Paso 9: Demostración interactiva (hasta Fase 5 = Shell) ─────────── */
-    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    kprintf("\n  All Phase 4 drivers loaded successfully!\n");
+    /* ── Paso 9: Filesystem ─────────────────────────────────────────────────── */
+    kfs_init();
 
-    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    kprintf("  Uptime: %u ticks  |  Timer: %u Hz\n\n",
-            (uint32_t)pit_get_ticks(), (uint32_t)PIT_TICK_RATE);
+    /* ── Paso 10: Intentar GUI (VESA) ──────────────────────────────────────── */
+    bool gui_ok = vesa_init(mbi);
 
-    vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-    kprintf("  [ Keyboard Test ] Type anything (ESC to skip):\n  > ");
-    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    if (gui_ok) {
+        kprintf("  [ OK ]  GUI mode enabled\n");
+        sleep_ms(300);
 
-    /* Mini bucle de eco de teclado para probar drivers */
-    char c;
-    while ((c = keyboard_getchar_blocking()) != 0x1B) {
-        if (c == '\n') {
-            vga_putchar('\n');
-            vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-            kprintf("  > ");
-            vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-        } else {
-            vga_putchar(c);
-        }
+        /* Inicializar ratón PS/2 */
+        mouse_init();
+
+        /* Inicializar el window manager */
+        wm_init();
+
+        /* Crear las ventanas del escritorio */
+        desktop_init();
+
+        /* Arrancar el WM — no retorna */
+        wm_run();
+    } else {
+        /* Fallback: modo texto */
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        kprintf("\n  VESA not available, falling back to text shell.\n");
+        sleep_ms(400);
+        shell_start();
     }
-
-    vga_set_color(VGA_COLOR_DARK_GREY, VGA_COLOR_BLACK);
-    kprintf("\n\n  Phase 5 (Shell) coming soon...\n");
 
     /* ── Bucle principal del kernel ──────────────────────────────────────── */
     /* Por ahora, un bucle de espera de interrupciones (halt loop).

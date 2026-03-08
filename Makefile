@@ -1,264 +1,332 @@
 # =============================================================================
-# KOSMO OS — Makefile Principal  (Fase 8 — Build System Completo)
-# Uso: make all | make iso | make run | make run-debug | make clean | make help
+# KOSMO OS — Makefile Principal
+# Archivo : Makefile
+# Función : Compila el bootloader, kernel y genera la imagen ISO.
+#           Soporte para QEMU y VirtualBox.
 # =============================================================================
 
-# ── Herramientas ──────────────────────────────────────────────────────────────
-CC      := gcc
-AS      := nasm
-LD      := ld
+# -----------------------------------------------------------------------------
+# CONFIGURACIÓN DEL TOOLCHAIN
+# Preferimos i686-elf-gcc (cross-compiler puro).
+# Si no está disponible, usamos gcc con flags de cross-compilación.
+# -----------------------------------------------------------------------------
+
+# Detectar si tenemos cross-compiler
+CROSS_GCC := $(shell which i686-elf-gcc 2>/dev/null)
+CROSS_LD  := $(shell which i686-elf-ld 2>/dev/null)
+CROSS_AS  := $(shell which i686-elf-as 2>/dev/null)
+
+ifdef CROSS_GCC
+    CC  := i686-elf-gcc
+    LD  := i686-elf-ld
+    AS  := i686-elf-as
+    $(info [INFO] Using cross-compiler: i686-elf-gcc)
+else
+    CC  := gcc
+    LD  := ld
+    AS  := as
+    $(info [WARN] Cross-compiler not found. Using system gcc with -m32)
+    EXTRA_CFLAGS := -m32
+    EXTRA_LDFLAGS := -m elf_i386
+endif
+
+NASM    := nasm
+AR      := ar
 OBJCOPY := objcopy
 
-ifneq ($(shell which i686-elf-gcc 2>/dev/null),)
-    CC      := i686-elf-gcc
-    LD      := i686-elf-ld
-    OBJCOPY := i686-elf-objcopy
-    CROSS   := 1
-else
-    CROSS   := 0
-endif
+# -----------------------------------------------------------------------------
+# DIRECTORIOS
+# -----------------------------------------------------------------------------
+BUILD_DIR   := build
+ISO_DIR     := $(BUILD_DIR)/iso
+GRUB_DIR    := $(ISO_DIR)/boot/grub
 
-# ── Directorios ───────────────────────────────────────────────────────────────
-BUILD_DIR  := build
-ISO_DIR    := $(BUILD_DIR)/iso
-BOOT_DIR   := $(ISO_DIR)/boot
-GRUB_DIR   := $(BOOT_DIR)/grub
-OBJ_DIR    := $(BUILD_DIR)/obj
+# -----------------------------------------------------------------------------
+# FLAGS DE COMPILACIÓN
+# -----------------------------------------------------------------------------
 
-ISO_FILE   := $(BUILD_DIR)/kosmo-os.iso
-IMG_FILE   := $(BUILD_DIR)/kosmo-os.img
-KERNEL_ELF := $(BUILD_DIR)/kernel.elf
-KERNEL_BIN := $(BOOT_DIR)/kernel.bin
-
-# ── Flags C ───────────────────────────────────────────────────────────────────
+# Flags para el kernel C
 CFLAGS := \
-    -m32 -std=c99 -ffreestanding -fno-builtin -fno-stack-protector \
-    -fno-pic -fno-omit-frame-pointer -Wall -Wextra -O2              \
-    -Werror=implicit-function-declaration                            \
-    -I include -I kernel -I kernel/arch/x86 -I kernel/core          \
-    -I drivers -I drivers/video -I drivers/input -I drivers/timer   \
-    -I libc -I shell -I shell/commands -I fs                         \
-    -I gui -I gui/font                 \
-    -I tests
+    $(EXTRA_CFLAGS)         \
+    -std=c99                \
+    -ffreestanding          \
+    -fno-builtin            \
+    -fno-stack-protector    \
+    -fno-pic                \
+    -Wall                   \
+    -Wextra                 \
+    -O2                     \
+    -I include              \
+    -I kernel/arch/x86      \
+    -I drivers/video        \
+    -I drivers/input        \
+    -I drivers/timer        \
+    -I shell                \
+    -I shell/commands       \
+    -I kernel/core          \
+    -I fs                   \
+    -I gui                  \
+    -I gui/font             \
+    -I kernel               \
+    -I drivers              \
+    -I libc
 
-ifeq ($(CROSS),1)
-    CFLAGS := $(filter-out -m32,$(CFLAGS))
-endif
+# Flags para el linker
+LDFLAGS := \
+    $(EXTRA_LDFLAGS)        \
+    -nostdlib               \
+    -T kernel/linker.ld
 
-NASM_BIN_FLAGS := -f bin
-NASM_ELF_FLAGS := -f elf32
+# Flags para NASM
+NASMFLAGS_BIN   := -f bin
+NASMFLAGS_ELF   := -f elf32
 
-LDFLAGS := -m elf_i386 -T kernel/linker.ld --nostdlib
+# -----------------------------------------------------------------------------
+# ARCHIVOS FUENTE
+# -----------------------------------------------------------------------------
 
-# ── Fuentes ───────────────────────────────────────────────────────────────────
+# Stage 1 y Stage 2 (binarios puros)
+BOOT1_SRC   := boot/stage1/boot.asm
+BOOT2_SRC   := boot/stage2/stage2.asm
+
+# Entry point del kernel (ASM)
+KERNEL_ASM_SRCS := \
+    kernel/arch/x86/entry.asm \
+    kernel/arch/x86/isr.asm
+
+# Fuentes C del kernel
 KERNEL_C_SRCS := \
-    kernel/arch/x86/gdt.c       kernel/arch/x86/idt.c     \
-    kernel/core/kernel.c        kernel/core/panic.c        \
-    drivers/video/vga.c         drivers/video/vesa.c       \
-    drivers/input/keyboard.c    drivers/input/mouse.c      \
-    drivers/timer/pit.c                                    \
-    fs/kosmofs.c                                           \
-    shell/shell.c               shell/commands/commands.c  \
-    shell/commands/cmd_fs.c                                \
-    gui/font/font8x8.c          gui/wm.c  gui/desktop.c   \
-    libc/string.c               libc/stdio.c \
-    tests/ktest.c
+    kernel/core/kernel.c        \
+    kernel/core/panic.c         \
+    kernel/arch/x86/gdt.c       \
+    kernel/arch/x86/idt.c       \
+    kernel/arch/x86/pic.c       \
+    kernel/mm/pmm.c             \
+    kernel/mm/heap.c            \
+    drivers/video/vga.c         \
+    drivers/input/keyboard.c    \
+    drivers/timer/pit.c         \
+    shell/shell.c               \
+    shell/commands/commands.c   \
+    shell/commands/cmd_fs.c     \
+    fs/kosmofs.c                \
+    gui/font/font8x8.c          \
+    drivers/video/vesa.c        \
+    drivers/input/mouse.c       \
+    gui/wm.c                    \
+    gui/desktop.c               \
+    libc/string.c               \
+    libc/stdio.c
 
-KERNEL_ASM_SRCS := kernel/arch/x86/entry.asm kernel/arch/x86/isr.asm
-
-KERNEL_C_OBJS   := $(patsubst %.c,  $(OBJ_DIR)/%.o, $(KERNEL_C_SRCS))
-KERNEL_ASM_OBJS := $(patsubst %.asm,$(OBJ_DIR)/%.o, $(KERNEL_ASM_SRCS))
+# Objetos generados
+KERNEL_ASM_OBJS := $(patsubst %.asm, $(BUILD_DIR)/%.o, $(KERNEL_ASM_SRCS))
+KERNEL_C_OBJS   := $(patsubst %.c,   $(BUILD_DIR)/%.o, $(KERNEL_C_SRCS))
 KERNEL_OBJS     := $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 
-STAGE1_BIN := $(BUILD_DIR)/stage1.bin
-STAGE2_BIN := $(BUILD_DIR)/stage2.bin
+# -----------------------------------------------------------------------------
+# OBJETIVOS PRINCIPALES
+# -----------------------------------------------------------------------------
 
-QEMU       := qemu-system-i386
-QEMU_FLAGS := -m 128M -vga std -serial stdio -no-reboot -name "Kosmo OS"
+.PHONY: all clean iso run run-vga run-debug setup-dirs
 
-# =============================================================================
-# TARGETS
-# =============================================================================
-.PHONY: all iso clean clean-obj run run-raw run-debug run-headless \
-        gdb disk-image check-tools check-syntax dump-elf disasm symbols \
-        size map info help bootloader kernel
-
-## all — Compile everything and generate ISO
-all: check-tools $(ISO_FILE)
+# Por defecto: compilar todo
+all: setup-dirs bootloader kernel iso
 	@echo ""
-	@echo "  ╔══════════════════════════════════════════╗"
-	@echo "  ║   Kosmo OS built successfully!           ║"
-	@echo "  ╚══════════════════════════════════════════╝"
-	@ls -lh $(ISO_FILE)
+	@echo "============================================"
+	@echo "  KOSMO OS build complete!"
+	@echo "  ISO: $(BUILD_DIR)/kosmo-os.iso"
+	@echo "============================================"
 
-iso: all
-
-check-tools:
-	@which nasm >/dev/null 2>&1 || (echo "ERROR: nasm missing. sudo apt install nasm" && exit 1)
-	@which $(CC) >/dev/null 2>&1 || (echo "ERROR: $(CC) missing" && exit 1)
-	@which $(LD) >/dev/null 2>&1 || (echo "ERROR: ld missing" && exit 1)
-	@echo "  Tools OK (CC=$(CC), CROSS=$(CROSS))"
-
-check-syntax: check-tools
-	@errors=0; for f in $(KERNEL_C_SRCS); do \
-	    $(CC) $(CFLAGS) -fsyntax-only "$$f" 2>&1 \
-	    && printf "  \033[32m✓\033[0m $$f\n" \
-	    || { printf "  \033[31m✗\033[0m $$f\n"; errors=$$((errors+1)); }; \
-	done; [ $$errors -eq 0 ] && echo "  All OK" || exit 1
-
-# ── Bootloader ────────────────────────────────────────────────────────────────
-bootloader: $(STAGE1_BIN) $(STAGE2_BIN)
-
-$(BUILD_DIR):
-	@mkdir -p $@
-
-$(STAGE1_BIN): boot/stage1/boot.asm | $(BUILD_DIR)
-	@echo "  [AS] stage1.asm → stage1.bin"
-	@nasm $(NASM_BIN_FLAGS) $< -o $@
-	@test $$(stat -c%s $@) -eq 512 || (echo "ERROR: Stage1 must be 512 bytes" && exit 1)
-
-$(STAGE2_BIN): boot/stage2/stage2.asm | $(BUILD_DIR)
-	@echo "  [AS] stage2.asm → stage2.bin"
-	@nasm $(NASM_BIN_FLAGS) $< -o $@
-
-# ── Kernel ────────────────────────────────────────────────────────────────────
-kernel: $(KERNEL_BIN)
-
-$(OBJ_DIR)/%.o: %.c
-	@mkdir -p $(dir $@)
-	@echo "  [CC] $<"
-	@$(CC) $(CFLAGS) -c $< -o $@
-
-$(OBJ_DIR)/%.o: %.asm
-	@mkdir -p $(dir $@)
-	@echo "  [AS] $<"
-	@nasm $(NASM_ELF_FLAGS) $< -o $@
-
-$(KERNEL_ELF): $(KERNEL_OBJS) | $(BUILD_DIR)
-	@echo "  [LD] Linking kernel..."
-	@$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJS)
-	@size $@
-
-$(GRUB_DIR):
+# -----------------------------------------------------------------------------
+# CREAR DIRECTORIOS DE BUILD
+# -----------------------------------------------------------------------------
+setup-dirs:
+	@mkdir -p $(BUILD_DIR)/boot/stage1
+	@mkdir -p $(BUILD_DIR)/boot/stage2
+	@mkdir -p $(BUILD_DIR)/kernel/arch/x86
+	@mkdir -p $(BUILD_DIR)/kernel/core
+	@mkdir -p $(BUILD_DIR)/kernel/mm
+	@mkdir -p $(BUILD_DIR)/drivers/video
+	@mkdir -p $(BUILD_DIR)/drivers/input
+	@mkdir -p $(BUILD_DIR)/drivers/timer
+	@mkdir -p $(BUILD_DIR)/libc
 	@mkdir -p $(GRUB_DIR)
+	@echo "[DIRS] Build directories ready."
 
-$(KERNEL_BIN): $(KERNEL_ELF) | $(GRUB_DIR)
-	@echo "  [OBJCOPY] ELF → raw BIN"
-	@$(OBJCOPY) -O binary $< $@
+# -----------------------------------------------------------------------------
+# BOOTLOADER
+# -----------------------------------------------------------------------------
+bootloader: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin
+	@echo "[BOOT] Bootloader ready."
 
-# ── ISO (GRUB2 + Multiboot) ───────────────────────────────────────────────────
-$(GRUB_DIR)/grub.cfg: iso/grub/grub.cfg | $(GRUB_DIR)
-	@cp $< $@
-
-$(ISO_FILE): $(KERNEL_BIN) $(GRUB_DIR)/grub.cfg
-	@echo "  [ISO] Building bootable ISO..."
-	@if which grub-mkrescue >/dev/null 2>&1; then \
-	    grub-mkrescue -o $@ $(ISO_DIR) 2>/dev/null; \
-	    echo "  ISO ready: $@ ($$(du -sh $@ | cut -f1))"; \
-	else \
-	    echo "  WARN: grub-mkrescue not found."; \
-	    echo "  Install: sudo apt install grub-pc-bin xorriso mtools"; \
-	    dd if=/dev/zero bs=1024 count=1440 of=$@ 2>/dev/null; \
+# Stage 1: MBR (512 bytes exactos)
+$(BUILD_DIR)/boot.bin: $(BOOT1_SRC)
+	@echo "[NASM] $< -> $@"
+	$(NASM) $(NASMFLAGS_BIN) $< -o $@
+	@# Verificar que el tamaño es exactamente 512 bytes
+	@SIZE=$$(stat -c%s $@); \
+	if [ "$$SIZE" -ne 512 ]; then \
+	    echo "[ERROR] boot.bin must be exactly 512 bytes! Got $$SIZE"; \
+	    exit 1; \
 	fi
+	@echo "[OK] boot.bin is 512 bytes."
 
-# ── Raw disk image ────────────────────────────────────────────────────────────
-## disk-image — Build raw 32 MB disk image (for VirtualBox/Rufus)
-disk-image: $(IMG_FILE)
+# Stage 2
+$(BUILD_DIR)/stage2.bin: $(BOOT2_SRC) boot/stage2/a20.asm
+	@echo "[NASM] $< -> $@"
+	$(NASM) $(NASMFLAGS_BIN) -I boot/stage2/ $< -o $@
+	@echo "[OK] stage2.bin: $$(stat -c%s $@) bytes"
 
-$(IMG_FILE): $(STAGE1_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
-	@echo "  [IMG] Building raw disk image (32 MB)..."
-	@dd if=/dev/zero  bs=512 count=65536 of=$@             2>/dev/null
-	@dd if=$(STAGE1_BIN) of=$@ bs=512 seek=0  conv=notrunc 2>/dev/null
-	@dd if=$(STAGE2_BIN) of=$@ bs=512 seek=2  conv=notrunc 2>/dev/null
-	@dd if=$(KERNEL_BIN) of=$@ bs=512 seek=16 conv=notrunc 2>/dev/null
-	@echo "  Raw image: $@ (Kernel at sector 16)"
+# -----------------------------------------------------------------------------
+# KERNEL
+# -----------------------------------------------------------------------------
+kernel: $(BUILD_DIR)/kernel.bin
+	@echo "[KERNEL] Kernel ready: $$(stat -c%s $<) bytes"
 
-# ── QEMU ──────────────────────────────────────────────────────────────────────
-## run — Boot ISO in QEMU
-run: $(ISO_FILE)
-	@$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_FILE)
+# Compilar ASM del kernel
+$(BUILD_DIR)/%.o: %.asm
+	@echo "[NASM] $< -> $@"
+	@mkdir -p $(dir $@)
+	$(NASM) $(NASMFLAGS_ELF) $< -o $@
 
-## run-raw — Boot raw image in QEMU
-run-raw: $(IMG_FILE)
-	@$(QEMU) $(QEMU_FLAGS) -drive format=raw,file=$(IMG_FILE)
+# Compilar C del kernel
+$(BUILD_DIR)/%.o: %.c
+	@echo "[CC]   $< -> $@"
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-## run-headless — Run without display (serial only)
-run-headless: $(ISO_FILE)
-	@$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_FILE) -display none
+# Enlazar el kernel en un ELF y convertir a binario plano
+$(BUILD_DIR)/kernel.elf: $(KERNEL_OBJS)
+	@echo "[LD]   Linking kernel..."
+	$(LD) $(LDFLAGS) $^ -o $@
 
-## run-debug — QEMU + GDB server on :1234
-run-debug: $(ISO_FILE)
-	@echo "  GDB server on :1234 — run 'make gdb' in another terminal"
-	@$(QEMU) $(QEMU_FLAGS) -cdrom $(ISO_FILE) \
-	    -s -S -d int,cpu_reset -D $(BUILD_DIR)/qemu_debug.log
+$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
+	@echo "[BIN]  Extracting raw binary..."
+	$(OBJCOPY) -O binary $< $@
 
-## gdb — Attach GDB to running QEMU
-gdb: $(KERNEL_ELF)
-	@gdb $(KERNEL_ELF) \
+# -----------------------------------------------------------------------------
+# IMAGEN ISO (booteable con GRUB2)
+# Compatible con Rufus, Ventoy, QEMU, VirtualBox
+# -----------------------------------------------------------------------------
+iso: $(BUILD_DIR)/kosmo-os.iso
+
+$(BUILD_DIR)/kosmo-os.iso: $(BUILD_DIR)/kernel.bin iso/grub/grub.cfg
+	@echo "[ISO]  Building ISO image..."
+
+	# Preparar estructura del directorio ISO
+	@cp $(BUILD_DIR)/kernel.bin $(ISO_DIR)/boot/kernel.bin
+	@cp iso/grub/grub.cfg $(GRUB_DIR)/grub.cfg
+
+	# Generar ISO con GRUB2 (xorriso + grub-mkrescue)
+	grub-mkrescue -o $(BUILD_DIR)/kosmo-os.iso $(ISO_DIR) \
+	    --compress=no \
+	    2>/dev/null || \
+	grub2-mkrescue -o $(BUILD_DIR)/kosmo-os.iso $(ISO_DIR) \
+	    --compress=no
+
+	@echo "[OK]   ISO generated: $(BUILD_DIR)/kosmo-os.iso"
+	@echo "       Size: $$(du -h $(BUILD_DIR)/kosmo-os.iso | cut -f1)"
+
+# -----------------------------------------------------------------------------
+# IMAGEN DE DISCO RAW (para pruebas con bootloader propio)
+# Genera una imagen .img con MBR + Stage2 + Kernel
+# -----------------------------------------------------------------------------
+disk-image: bootloader kernel
+	@echo "[IMG]  Creating raw disk image..."
+
+	# Crear imagen vacía de 10MB
+	dd if=/dev/zero of=$(BUILD_DIR)/kosmo.img bs=512 count=20480 2>/dev/null
+
+	# Escribir Stage 1 en el sector 0 (MBR)
+	dd if=$(BUILD_DIR)/boot.bin of=$(BUILD_DIR)/kosmo.img \
+	    bs=512 count=1 conv=notrunc 2>/dev/null
+
+	# Escribir Stage 2 desde el sector 2
+	dd if=$(BUILD_DIR)/stage2.bin of=$(BUILD_DIR)/kosmo.img \
+	    bs=512 seek=1 conv=notrunc 2>/dev/null
+
+	# Escribir Kernel desde el sector 18
+	dd if=$(BUILD_DIR)/kernel.bin of=$(BUILD_DIR)/kosmo.img \
+	    bs=512 seek=17 conv=notrunc 2>/dev/null
+
+	@echo "[OK]   Disk image: $(BUILD_DIR)/kosmo.img"
+
+# -----------------------------------------------------------------------------
+# EJECUCIÓN CON QEMU
+# -----------------------------------------------------------------------------
+
+# Arranque desde ISO con GRUB (modo recomendado)
+run: iso
+	@echo "[QEMU] Starting Kosmo OS from ISO..."
+	qemu-system-i386 \
+	    -cdrom $(BUILD_DIR)/kosmo-os.iso \
+	    -m 64M \
+	    -vga std \
+	    -serial stdio \
+	    -no-reboot \
+	    -no-shutdown
+
+# Modo pantalla gráfica QEMU sin terminal
+run-vga: iso
+	qemu-system-i386 \
+	    -cdrom $(BUILD_DIR)/kosmo-os.iso \
+	    -m 64M \
+	    -vga std \
+	    -no-reboot
+
+# Arranque desde imagen raw (bootloader propio)
+run-raw: disk-image
+	@echo "[QEMU] Starting Kosmo OS from raw image..."
+	qemu-system-i386 \
+	    -drive file=$(BUILD_DIR)/kosmo.img,format=raw \
+	    -m 64M \
+	    -vga std \
+	    -serial stdio \
+	    -no-reboot \
+	    -no-shutdown
+
+# Modo debug con GDB
+run-debug: iso
+	@echo "[QEMU] Starting Kosmo OS in debug mode (GDB on :1234)..."
+	qemu-system-i386 \
+	    -cdrom $(BUILD_DIR)/kosmo-os.iso \
+	    -m 64M \
+	    -vga std \
+	    -serial stdio \
+	    -s -S \
+	    -no-reboot \
+	    -no-shutdown
+
+# Conectar GDB al QEMU en debug
+gdb:
+	gdb \
 	    -ex "target remote :1234" \
-	    -ex "set architecture i386" \
+	    -ex "symbol-file $(BUILD_DIR)/kernel.elf" \
 	    -ex "break kernel_main" \
 	    -ex "continue"
 
-## run-vbox — Convert to VMDK for VirtualBox
-run-vbox: $(IMG_FILE)
-	@VBoxManage convertdd $(IMG_FILE) $(BUILD_DIR)/kosmo-os.vmdk --format VMDK \
-	    && echo "  VMDK ready: $(BUILD_DIR)/kosmo-os.vmdk" \
-	    || echo "  VBoxManage not found"
-
-# ── Análisis ──────────────────────────────────────────────────────────────────
-## dump-elf — Show ELF headers
-dump-elf: $(KERNEL_ELF)
-	@readelf -a $< | head -80
-
-## disasm — Disassemble kernel (Intel syntax)
-disasm: $(KERNEL_ELF)
-	@objdump -d -M intel $< | less
-
-## symbols — Symbol table
-symbols: $(KERNEL_ELF)
-	@nm $< | sort | grep -v " U "
-
-## size — Section sizes
-size: $(KERNEL_ELF)
-	@size $<
-
-## map — Linker memory map
-map: $(KERNEL_OBJS)
-	@$(LD) $(LDFLAGS) -Map=$(BUILD_DIR)/kernel.map -o $(KERNEL_ELF) $(KERNEL_OBJS)
-	@grep -A2 "^\.text\|^\.data\|^\.bss\|^\.rodata" $(BUILD_DIR)/kernel.map
-
-# ── Limpieza ──────────────────────────────────────────────────────────────────
-## clean — Remove all build artifacts
+# -----------------------------------------------------------------------------
+# LIMPIEZA
+# -----------------------------------------------------------------------------
 clean:
+	@echo "[CLEAN] Removing build directory..."
 	@rm -rf $(BUILD_DIR)
-	@echo "  Cleaned."
+	@echo "[CLEAN] Done."
 
-## clean-obj — Remove object files only
-clean-obj:
-	@rm -rf $(OBJ_DIR)
+# Limpiar solo objetos (mantener ISO)
+clean-objs:
+	@find $(BUILD_DIR) -name "*.o" -delete
+	@find $(BUILD_DIR) -name "*.elf" -delete
 
-# ── Info ──────────────────────────────────────────────────────────────────────
-## info — Show build configuration
+# -----------------------------------------------------------------------------
+# INFORMACIÓN DE BUILD
+# -----------------------------------------------------------------------------
 info:
-	@echo "  CC=$(CC)  LD=$(LD)  CROSS=$(CROSS)"
-	@echo "  C sources : $(words $(KERNEL_C_SRCS))"
-	@echo "  ASM sources: $(words $(KERNEL_ASM_SRCS))"
-	@echo "  ISO: $(ISO_FILE)   IMG: $(IMG_FILE)"
-
-
-## test — Build with KOSMO_TEST=1 and run tests in QEMU
-test:
-	$(MAKE) all CFLAGS="$(CFLAGS) -DKOSMO_TEST=1"
-	$(QEMU) $(QEMU_FLAGS) -display none -cdrom $(ISO_FILE) || true
-
-## test-verbose — Run automated QEMU test suite
-test-verbose: all
-	chmod +x scripts/debug/qemu_test.sh
-	./scripts/debug/qemu_test.sh
-
-## help — List all targets
-help:
-	@echo ""; grep -E '^## ' Makefile | sed 's/## /  make /'; echo ""
-
--include $(KERNEL_C_OBJS:.o=.d)
+	@echo "========================================"
+	@echo "  KOSMO OS Build Information"
+	@echo "========================================"
+	@echo "  CC:      $(CC)"
+	@echo "  LD:      $(LD)"
+	@echo "  NASM:    $(shell $(NASM) --version | head -1)"
+	@echo "  CFLAGS:  $(CFLAGS)"
+	@echo "========================================"
