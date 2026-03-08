@@ -65,8 +65,6 @@ CFLAGS := \
     -I shell/commands       \
     -I kernel/core          \
     -I fs                   \
-    -I gui                  \
-    -I gui/font             \
     -I kernel               \
     -I drivers              \
     -I libc
@@ -110,11 +108,6 @@ KERNEL_C_SRCS := \
     shell/commands/commands.c   \
     shell/commands/cmd_fs.c     \
     fs/kosmofs.c                \
-    gui/font/font8x8.c          \
-    drivers/video/vesa.c        \
-    drivers/input/mouse.c       \
-    gui/wm.c                    \
-    gui/desktop.c               \
     libc/string.c               \
     libc/stdio.c
 

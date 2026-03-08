@@ -20,10 +20,6 @@
 #include "keyboard.h"
 #include "shell.h"
 #include "kosmofs.h"
-#include "vesa.h"
-#include "mouse.h"
-#include "wm.h"
-#include "desktop.h"
 
 /* =============================================================================
  * ESTADO GLOBAL DEL SISTEMA
@@ -256,31 +252,13 @@ void kernel_main(uint32_t magic, multiboot_info_t* mbi) {
     /* ── Paso 9: Filesystem ─────────────────────────────────────────────────── */
     kfs_init();
 
-    /* ── Paso 10: Intentar GUI (VESA) ──────────────────────────────────────── */
-    bool gui_ok = vesa_init(mbi);
+    /* ── Paso 10: Lanzar el shell (Fase 5) ─────────────────────────────────── */
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    kprintf("\n  All subsystems loaded. Starting shell...\n");
+    sleep_ms(400);
 
-    if (gui_ok) {
-        kprintf("  [ OK ]  GUI mode enabled\n");
-        sleep_ms(300);
-
-        /* Inicializar ratón PS/2 */
-        mouse_init();
-
-        /* Inicializar el window manager */
-        wm_init();
-
-        /* Crear las ventanas del escritorio */
-        desktop_init();
-
-        /* Arrancar el WM — no retorna */
-        wm_run();
-    } else {
-        /* Fallback: modo texto */
-        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-        kprintf("\n  VESA not available, falling back to text shell.\n");
-        sleep_ms(400);
-        shell_start();
-    }
+    /* shell_start() contiene el bucle principal — no retorna */
+    shell_start();
 
     /* ── Bucle principal del kernel ──────────────────────────────────────── */
     /* Por ahora, un bucle de espera de interrupciones (halt loop).

@@ -15,6 +15,7 @@
 #include "io.h"
 #include "types.h"
 #include "kernel.h"
+#include "kosmofs.h"
 #include "multiboot.h"
 
 /* =============================================================================
@@ -293,45 +294,6 @@ int cmd_mem(shell_args_t* args) {
     return SHELL_OK;
 }
 
-/* =============================================================================
- * CMD: ls — Listar archivos (stub hasta Fase 6)
- * ============================================================================= */
-int cmd_ls(shell_args_t* args) {
-    const char* path = (args->argc >= 2) ? args->argv[1] : "/";
-
-    vga_putchar('\n');
-    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    kprintf("  Directory: %s\n", path);
-    print_hline('-', 40, VGA_COLOR_DARK_GREY);
-
-    /* Stub: mostrar un sistema de archivos ficticio hasta Fase 6 */
-    struct { const char* name; const char* type; const char* size; } entries[] = {
-        { "boot/",      "DIR ", "  -" },
-        { "kernel/",    "DIR ", "  -" },
-        { "etc/",       "DIR ", "  -" },
-        { "bin/",       "DIR ", "  -" },
-        { "README.txt", "FILE", "512" },
-        { "kosmo.cfg",  "FILE", "128" },
-    };
-
-    for (uint32_t i = 0; i < sizeof(entries)/sizeof(entries[0]); i++) {
-        if (entries[i].name[strlen(entries[i].name)-1] == '/') {
-            vga_set_color(VGA_COLOR_LIGHT_BLUE, VGA_COLOR_BLACK);
-        } else {
-            vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-        }
-        kprintf("  [%s]  %-20s  %s B\n",
-                entries[i].type,
-                entries[i].name,
-                entries[i].size);
-    }
-
-    print_hline('-', 40, VGA_COLOR_DARK_GREY);
-    vga_set_color(VGA_COLOR_DARK_GREY, VGA_COLOR_BLACK);
-    kprintf("  6 entries  (full FS in Phase 6)\n\n");
-    vga_set_color(VGA_DEFAULT_FG, VGA_COLOR_BLACK);
-    return SHELL_OK;
-}
 
 /* =============================================================================
  * CMD: color — Cambiar colores del terminal
@@ -474,4 +436,6 @@ void commands_register_all(void) {
     for (uint32_t i = 0; i < sizeof(cmds)/sizeof(cmds[0]); i++) {
         shell_register_command(&cmds[i]);
     }
+    /* Register filesystem commands (Phase 6) */
+    fs_commands_register();
 }
