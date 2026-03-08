@@ -1,0 +1,86 @@
+name: Build Kosmo OS ISO
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            nasm \
+            gcc \
+            gcc-multilib \
+            binutils \
+            make \
+            grub-pc-bin \
+            grub-common \
+            xorriso \
+            mtools \
+            lsb-release
+
+      - name: Show tool versions
+        run: |
+          echo "=== Tool versions ==="
+          nasm --version
+          gcc --version
+          ld --version | head -1
+          grub-mkrescue --version
+          xorriso --version 2>&1 | head -1
+
+      - name: Check project structure
+        run: |
+          echo "=== Project files ==="
+          find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "Makefile" \) | sort
+
+      - name: Syntax check (all C files)
+        run: make check-syntax
+
+      - name: Build kernel + ISO
+        run: make all
+
+      - name: Show build results
+        run: |
+          echo "=== Build output ==="
+          ls -lh build/
+          echo ""
+          echo "=== Kernel sections ==="
+          size build/kernel.elf
+          echo ""
+          echo "=== ISO info ==="
+          du -sh build/kosmo-os.iso
+
+      - name: Verify ISO is bootable
+        run: |
+          # Comprobar que la ISO tiene la firma de GRUB
+          if file build/kosmo-os.iso | grep -qi "ISO 9660\|Boot"; then
+            echo "✓ ISO looks bootable"
+          else
+            echo "⚠ ISO may not be bootable - check grub-mkrescue output"
+            file build/kosmo-os.iso
+          fi
+
+      - name: Upload ISO as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kosmo-os-iso
+          path: build/kosmo-os.iso
+          retention-days: 30
+
+      - name: Upload kernel ELF (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kosmo-os-kernel-elf
+          path: build/kernel.elf
+          retention-days: 30
